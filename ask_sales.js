@@ -14,11 +14,36 @@ const openai = new OpenAI({
     apiKey: process.env.OPENAI_API_KEY
 });
 
-// Create readline interface
-const rl = readline.createInterface({
-    input: process.stdin,
-    output: process.stdout
-});
+// Create readline interface with custom prompt handling
+function createCustomReadline(analysisData) {
+    const rl = readline.createInterface({
+        input: process.stdin,
+        output: process.stdout,
+        prompt: '\nWhat would you like to know about the IBM customer data? '
+    });
+
+    // Handle line input
+    rl.on('line', async (line) => {
+        if (line.toLowerCase() === 'exit') {
+            console.log('Goodbye!');
+            rl.close();
+            process.exit(0);
+        }
+
+        console.log('\nAnalyzing...\n');
+        const answer = await askQuestion(analysisData, line);
+        console.log(answer);
+        rl.prompt();
+    });
+
+    // Handle SIGINT (Ctrl+C)
+    rl.on('SIGINT', () => {
+        console.log('\nGoodbye!');
+        process.exit(0);
+    });
+
+    return rl;
+}
 
 async function loadAnalysisData() {
     try {
@@ -140,7 +165,7 @@ function getRelevantData(analysisData, question) {
             relevantData.chunks = createChunks(topCustomers, 10, { ...context, type: 'topCustomers' });
         } else if (questionLower.includes('growth')) {
             const growingCustomers = customersWithRevenue
-                .filter(c => c.growth !== 'N/A' && c.growth !== 'Infinity')
+                .filter(c => c.growth !== 'N/A' && c.growth !== 'Not Available')
                 .sort((a, b) => Number(b.growth) - Number(a.growth))
                 .slice(0, 50);
             relevantData.chunks = createChunks(growingCustomers, 10, { ...context, type: 'fastestGrowing' });
@@ -527,22 +552,8 @@ async function main() {
     console.log('- Growth trends (e.g., "Which customers show the highest growth?")');
     console.log('\nType "exit" to quit the program.\n');
 
-    const askNextQuestion = () => {
-        rl.question('\nWhat would you like to know about the IBM customer data? ', async (question) => {
-            if (question.toLowerCase() === 'exit') {
-                console.log('Goodbye!');
-                rl.close();
-                return;
-            }
-
-            console.log('\nAnalyzing...\n');
-            const answer = await askQuestion(analysisData, question);
-            console.log(answer);
-            askNextQuestion();
-        });
-    };
-
-    askNextQuestion();
+    const rl = createCustomReadline(analysisData);
+    rl.prompt();
 }
 
 // Start the program

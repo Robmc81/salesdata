@@ -1,5 +1,10 @@
 #!/bin/bash
 
+# Load environment variables from .env file
+if [ -f .env ]; then
+    export $(cat .env | xargs)
+fi
+
 # Check for required environment variables
 if [ -z "$OPENAI_API_KEY" ]; then
     echo "Error: OPENAI_API_KEY environment variable is required"
@@ -11,8 +16,12 @@ if [ -z "$SUPABASE_KEY" ]; then
     exit 1
 fi
 
-# Run the top clients analysis
-node analyze_top_clients.js
-
-# Run the comprehensive analysis
-node analyze_data.js 
+# Check command line arguments
+if [ "$1" == "interactive" ]; then
+    echo "Starting interactive sales analysis..."
+    node ask_sales.js
+else
+    # Run the standard analysis
+    echo "Running standard analysis..."
+    node analyze_data.js
+fi 

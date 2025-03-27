@@ -1,18 +1,8 @@
-const { createClient } = require('@supabase/supabase-js');
 const OpenAI = require('openai');
 const readline = require('readline');
+const fs = require('fs').promises;
 
-// Configuration
-const supabaseUrl = process.env.SUPABASE_URL || 'https://nyuhfiajymtbkaabezoc.supabase.co';
-const supabaseKey = process.env.SUPABASE_KEY;
-
-if (!supabaseKey) {
-    console.error('Error: SUPABASE_KEY environment variable is required');
-    process.exit(1);
-}
-
-// Initialize clients
-const supabase = createClient(supabaseUrl, supabaseKey);
+// Initialize OpenAI client
 const openai = new OpenAI({
     apiKey: process.env.OPENAI_API_KEY
 });
@@ -23,142 +13,116 @@ const rl = readline.createInterface({
     output: process.stdout
 });
 
-async function fetchSalesData() {
+async function loadAnalysisData() {
     try {
-        const { data, error } = await supabase
-            .from('atlgams')
-            .select('*')
-            .order('total_ibm_rev_2024', { ascending: false });
-
-        if (error) {
-            console.error('Error fetching data:', error);
-            return null;
-        }
-
-        return {
-            rawData: data,
-            summary: {
-                totalCustomers: data.length,
-                totalRevenue: {
-                    2024: data.reduce((sum, c) => sum + (Number(c.total_ibm_rev_2024) || 0), 0),
-                    2023: data.reduce((sum, c) => sum + (Number(c.total_ibm_rev_2023) || 0), 0),
-                    2022: data.reduce((sum, c) => sum + (Number(c.total_ibm_rev_2022) || 0), 0)
-                },
-                sectors: Object.entries(
-                    data.reduce((acc, curr) => {
-                        if (curr.sector) {
-                            acc[curr.sector] = (acc[curr.sector] || 0) + 1;
-                        }
-                        return acc;
-                    }, {})
-                ).map(([sector, count]) => ({
-                    sector,
-                    count,
-                    percentage: ((count / data.length) * 100).toFixed(2)
-                })),
-                products: {
-                    watsonx: data.filter(c => c.watsonx_ai).length,
-                    redHat: data.filter(c => c.red_hat_2024).length,
-                    cloud: data.filter(c => c.cloud_platform_paas_2024).length,
-                    automation: data.filter(c => c.automation_2024).length,
-                    security: data.filter(c => c.security_2024).length
-                }
-            }
-        };
+        const data = await fs.readFile('territory_analysis_data.json', 'utf8');
+        return JSON.parse(data);
     } catch (error) {
-        console.error('Error:', error);
+        console.error('Error loading territory_analysis_data.json:', error);
         return null;
     }
 }
 
-function getRelevantData(salesData, question) {
+function getRelevantData(analysisData, question) {
     const questionLower = question.toLowerCase();
     const relevantData = {
-        summary: salesData.summary
+        totalCustomers: analysisData.totalCustomers,
+        totalRevenue: analysisData.totalRevenue
     };
 
-    // If asking about specific customers
+    // If asking about specific customers or revenue
     if (questionLower.includes('customer') || 
         questionLower.includes('client') || 
         questionLower.includes('revenue') ||
-        questionLower.includes('top')) {
-        relevantData.topCustomers = salesData.rawData
-            .slice(0, 20)
-            .map(c => ({
-                name: c.urn_name,
-                revenue2024: c.total_ibm_rev_2024,
-                revenue2023: c.total_ibm_rev_2023,
-                sector: c.sector
-            }));
+        questionLower.includes('company') ||
+        questionLower.includes('account')) {
+            
+        // Get all customers with revenue
+        const customersWithRevenue = analysisData.customers.filter(c => 
+            Number(c.revenue2024) > 0 || 
+            Number(c.revenue2023) > 0 || 
+            Number(c.revenue2022) > 0
+        );
+
+        // Add relevant customer data based on the question
+        if (questionLower.includes('top') || questionLower.includes('largest')) {
+            relevantData.topCustomers = customersWithRevenue
+                .sort((a, b) => Number(b.revenue2024) - Number(a.revenue2024))
+                .slice(0, 20);
+        } else if (questionLower.includes('growth') || questionLower.includes('growing')) {
+            relevantData.fastestGrowing = customersWithRevenue
+                .filter(c => c.growth !== 'N/A')
+                .sort((a, b) => Number(b.growth) - Number(a.growth))
+                .slice(0, 20);
+        } else {
+            // Include all customers if the question is general
+            relevantData.customers = customersWithRevenue;
+        }
     }
 
     // If asking about sectors
     if (questionLower.includes('sector') || 
         questionLower.includes('industry') || 
-        questionLower.includes('distribution')) {
-        relevantData.sectorDetails = Object.entries(
-            salesData.rawData.reduce((acc, curr) => {
-                if (curr.sector) {
-                    if (!acc[curr.sector]) {
-                        acc[curr.sector] = {
-                            count: 0,
-                            revenue2024: 0,
-                            revenue2023: 0
-                        };
-                    }
-                    acc[curr.sector].count++;
-                    acc[curr.sector].revenue2024 += Number(curr.total_ibm_rev_2024) || 0;
-                    acc[curr.sector].revenue2023 += Number(curr.total_ibm_rev_2023) || 0;
-                }
-                return acc;
-            }, {})
-        ).map(([sector, data]) => ({
-            sector,
-            ...data,
-            growth: ((data.revenue2024 - data.revenue2023) / data.revenue2023 * 100).toFixed(2)
-        }));
+        questionLower.includes('segment')) {
+        relevantData.sectors = analysisData.sectors;
+        
+        // Add sector-specific customer lists if needed
+        if (questionLower.includes('financial') || 
+            questionLower.includes('distribution') ||
+            questionLower.includes('industrial')) {
+            const sectorName = questionLower.includes('financial') ? 'Financial Services' :
+                             questionLower.includes('distribution') ? 'Distribution' :
+                             questionLower.includes('industrial') ? 'Industrial' : null;
+            
+            if (sectorName) {
+                relevantData.sectorCustomers = analysisData.customers
+                    .filter(c => c.sector === sectorName)
+                    .sort((a, b) => Number(b.revenue2024) - Number(a.revenue2024));
+            }
+        }
     }
 
     // If asking about products
     if (questionLower.includes('product') || 
-        questionLower.includes('watsonx') || 
-        questionLower.includes('redhat') ||
-        questionLower.includes('adoption')) {
-        relevantData.productDetails = {
-            summary: salesData.summary.products,
-            topAdopters: {
-                watsonx: salesData.rawData
-                    .filter(c => c.watsonx_ai)
-                    .slice(0, 5)
-                    .map(c => c.urn_name),
-                redHat: salesData.rawData
-                    .filter(c => c.red_hat_2024)
-                    .slice(0, 5)
-                    .map(c => c.urn_name)
-            }
-        };
+        questionLower.includes('software') || 
+        questionLower.includes('solution') ||
+        questionLower.includes('websphere') ||
+        questionLower.includes('mq') ||
+        questionLower.includes('turbonomic')) {
+        relevantData.products = analysisData.products;
+
+        // Get customers with specific products if mentioned
+        const productMentioned = analysisData.products.topProducts
+            .find(p => questionLower.includes(p.product.toLowerCase()));
+        
+        if (productMentioned) {
+            relevantData.productCustomers = analysisData.customers
+                .filter(c => c.products[productMentioned.product])
+                .sort((a, b) => Number(b.revenue2024) - Number(a.revenue2024));
+        }
     }
 
     return relevantData;
 }
 
-async function askQuestion(salesData, question) {
+async function askQuestion(analysisData, question) {
     try {
-        const relevantData = getRelevantData(salesData, question);
+        const relevantData = getRelevantData(analysisData, question);
         
         const completion = await openai.chat.completions.create({
             model: "gpt-3.5-turbo",
             messages: [
                 {
                     role: "system",
-                    content: `You are a business analyst specializing in IBM customer data analysis. 
+                    content: `You are a senior IBM business analyst specializing in sales territory analysis. 
                     Provide specific, data-driven answers with exact numbers and percentages.
-                    Format your responses in a clear, professional manner using markdown.
-                    Focus on actionable insights and clear trends in the data.`
+                    Format your responses in markdown with clear sections and bullet points.
+                    Focus on actionable insights and clear trends in the data.
+                    When discussing money values, format them as currency with commas (e.g., $1,234,567).`
                 },
                 {
                     role: "user",
-                    content: `Based on this IBM sales data, please answer the following question:
+                    content: `Based on this IBM customer data, please answer the following question:
 
                     Question: ${question}
 
@@ -167,34 +131,34 @@ async function askQuestion(salesData, question) {
                 }
             ],
             temperature: 0.7,
-            max_tokens: 1000
+            max_tokens: 2000
         });
 
         return completion.choices[0].message.content;
     } catch (error) {
         console.error('Error getting answer:', error);
-        return 'Sorry, there was an error processing your question. Please try a more specific question or break it down into smaller parts.';
+        return 'Sorry, there was an error processing your question. Please try again or rephrase your question.';
     }
 }
 
 async function main() {
-    console.log('Fetching sales data...');
-    const salesData = await fetchSalesData();
+    console.log('Loading analysis data...');
+    const analysisData = await loadAnalysisData();
     
-    if (!salesData) {
-        console.error('Failed to fetch sales data. Please check your credentials and try again.');
+    if (!analysisData) {
+        console.error('Failed to load analysis data. Please ensure territory_analysis_data.json exists in the current directory.');
         process.exit(1);
     }
 
-    console.log('\nSales data loaded successfully! You can now ask questions about:');
-    console.log('- Revenue analysis and trends (e.g., "Who are our top 5 customers by revenue?")');
+    console.log('\nAnalysis data loaded successfully! You can now ask questions about:');
+    console.log('- Customer analysis (e.g., "Who are our top 10 customers by revenue?")');
     console.log('- Sector performance (e.g., "How is the Financial Services sector performing?")');
-    console.log('- Product adoption (e.g., "What is the adoption rate of Watsonx?")');
-    console.log('- Growth metrics (e.g., "Which sectors show the highest growth?")');
+    console.log('- Product adoption (e.g., "What products have the highest adoption rates?")');
+    console.log('- Growth trends (e.g., "Which customers show the highest growth?")');
     console.log('\nType "exit" to quit the program.\n');
 
     const askNextQuestion = () => {
-        rl.question('\nWhat would you like to know about the sales data? ', async (question) => {
+        rl.question('\nWhat would you like to know about the IBM customer data? ', async (question) => {
             if (question.toLowerCase() === 'exit') {
                 console.log('Goodbye!');
                 rl.close();
@@ -202,7 +166,7 @@ async function main() {
             }
 
             console.log('\nAnalyzing...\n');
-            const answer = await askQuestion(salesData, question);
+            const answer = await askQuestion(analysisData, question);
             console.log(answer);
             askNextQuestion();
         });

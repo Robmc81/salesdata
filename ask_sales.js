@@ -63,7 +63,7 @@ function getRelevantData(analysisData, question) {
     };
 
     // Helper function to create chunks
-    function createChunks(data, chunkSize = 10, context = {}) {
+    function createChunks(data, chunkSize = 5, context = {}) {
         const chunks = [];
         for (let i = 0; i < data.length; i += chunkSize) {
             const chunkData = data.slice(i, i + chunkSize);
@@ -219,68 +219,54 @@ function getRelevantData(analysisData, question) {
     return relevantData;
 }
 
-// Modify the estimateTokens function to be more conservative
+// Update the estimateTokens function to be more accurate
 function estimateTokens(text) {
-    // GPT-3 uses roughly 4 characters per token on average
-    // Being even more conservative with our estimate
-    const characters = text.length;
-    const punctuation = (text.match(/[.,!?;:'"()\[\]{}]/g) || []).length;
-    const words = text.split(/\s+/).length;
-    
-    // More conservative multipliers
-    // Each word is roughly 1.5 tokens (up from 1.3)
-    // Each punctuation is roughly 0.7 tokens (up from 0.5)
-    // Add 30% buffer for safety (up from 20%)
-    return Math.ceil((words * 1.5 + punctuation * 0.7) * 1.3);
+    // Using a more conservative estimate: roughly 4 characters per token
+    return Math.ceil(text.length / 4);
 }
 
 async function askQuestionWithChunks(analysisData, question, relevantData) {
     try {
-        // If we have chunks, process them
         if (relevantData.chunks) {
             let finalAnswer = '';
             const chunks = relevantData.chunks;
 
-            // Process each chunk
             for (let i = 0; i < chunks.length; i++) {
                 const chunk = chunks[i];
                 const isLastChunk = i === chunks.length - 1;
 
-                // Prepare the analysis prompt based on chunk type
+                // Simplify the analysis prompt to reduce tokens
                 let analysisPrompt = '';
+                const chunkData = chunk.data.map(d => ({
+                    name: d.name,
+                    revenue2024: d.revenue2024,
+                    location: d.location,
+                    sector: d.sector
+                }));
+
                 switch (chunk.type) {
                     case 'cityOverview':
-                        analysisPrompt = `Analyze the following cities by revenue and customer count:
-                        ${JSON.stringify(chunk.data, null, 2)}`;
+                        analysisPrompt = `Cities (${chunk.chunkInfo.start}-${chunk.chunkInfo.end}/${chunk.chunkInfo.totalItems}): ${JSON.stringify(chunkData)}`;
                         break;
                     case 'customerAnalysis':
                     case 'topCustomers':
                     case 'fastestGrowing':
-                        analysisPrompt = `Analyze the following customers (${chunk.chunkInfo.start}-${chunk.chunkInfo.end} of ${chunk.chunkInfo.totalItems}):
-                        
-                        Overview:
-                        - Total Customers: ${chunk.totalCustomers}
-                        - Total Revenue 2024: $${chunk.totalRevenue[2024].toLocaleString()}
-                        - Total Revenue 2023: $${chunk.totalRevenue[2023].toLocaleString()}
-                        - Total Revenue 2022: $${chunk.totalRevenue[2022].toLocaleString()}
-
-                        Customer Details:
-                        ${JSON.stringify(chunk.data, null, 2)}`;
+                        analysisPrompt = `Customers (${chunk.chunkInfo.start}-${chunk.chunkInfo.end}/${chunk.chunkInfo.totalItems}): ${JSON.stringify(chunkData)}`;
                         break;
                     case 'sectorAnalysis':
-                        analysisPrompt = `Analyze the following sectors and their customers:
-                        ${JSON.stringify(chunk.data, null, 2)}`;
+                        analysisPrompt = `Sectors (${chunk.chunkInfo.start}-${chunk.chunkInfo.end}/${chunk.chunkInfo.totalItems}): ${JSON.stringify(chunkData)}`;
                         break;
                     case 'productAnalysis':
-                        analysisPrompt = `Analyze the following customers and their product adoption:
-                        
-                        Total Customers with Products: ${chunk.totalCustomersWithProducts}
-                        Customer Details (${chunk.chunkInfo.start}-${chunk.chunkInfo.end} of ${chunk.chunkInfo.totalItems}):
-                        ${JSON.stringify(chunk.data, null, 2)}`;
+                        analysisPrompt = `Products (${chunk.chunkInfo.start}-${chunk.chunkInfo.end}/${chunk.chunkInfo.totalItems}): ${JSON.stringify(chunkData)}`;
                         break;
                     default:
-                        analysisPrompt = `Analyze the following data:
-                        ${JSON.stringify(chunk.data, null, 2)}`;
+                        analysisPrompt = JSON.stringify(chunkData);
+                }
+
+                // Ensure we don't exceed token limit
+                const maxChars = 4000; // Roughly 1000 tokens
+                if (analysisPrompt.length > maxChars) {
+                    analysisPrompt = analysisPrompt.substring(0, maxChars) + '...';
                 }
 
                 const completion = await openai.chat.completions.create({
@@ -288,26 +274,15 @@ async function askQuestionWithChunks(analysisData, question, relevantData) {
                     messages: [
                         {
                             role: "system",
-                            content: `You are a senior IBM business analyst specializing in sales territory analysis. 
-                            ${chunks.length > 1 ? `You are analyzing chunk ${i + 1} of ${chunks.length}. 
-                            ${!isLastChunk ? 'Provide partial analysis that will be combined with other chunks.' : 'This is the final chunk. Provide a complete analysis.'}` : ''}
-                            Provide specific, data-driven answers with exact numbers and percentages.
-                            Format your responses in markdown with clear sections and bullet points.
-                            When discussing money values, format them as currency with commas (e.g., $1,234,567).`
+                            content: "Analyze IBM customer data. Be concise and focus on key metrics."
                         },
                         {
                             role: "user",
-                            content: `Based on this IBM customer data${chunks.length > 1 ? ` (chunk ${i + 1} of ${chunks.length})` : ''}, please answer the following question:
-
-                            Question: ${question}
-
-                            ${analysisPrompt}
-                            
-                            ${finalAnswer ? 'Previous Analysis:\n' + finalAnswer : ''}`
+                            content: `Q: ${question}\n${analysisPrompt}${finalAnswer ? '\nPrevious insights:' + finalAnswer.substring(0, 500) : ''}`
                         }
                     ],
                     temperature: 0.7,
-                    max_tokens: 2000
+                    max_tokens: 500
                 });
 
                 const chunkAnswer = completion.choices[0].message.content;
@@ -316,25 +291,25 @@ async function askQuestionWithChunks(analysisData, question, relevantData) {
                     if (i === 0) {
                         finalAnswer = chunkAnswer;
                     } else if (isLastChunk) {
-                        // For the last chunk, provide a summary
+                        // Simplified summary completion
                         const summaryCompletion = await openai.chat.completions.create({
                             model: "gpt-3.5-turbo",
                             messages: [
                                 {
                                     role: "system",
-                                    content: "You are summarizing multiple chunks of analysis into a cohesive final response. Combine the insights and remove any redundancy."
+                                    content: "Summarize the key findings concisely."
                                 },
                                 {
                                     role: "user",
-                                    content: `Combine these analyses into a single coherent response:\n\nPrevious analysis:\n${finalAnswer}\n\nFinal chunk analysis:\n${chunkAnswer}`
+                                    content: `Combine these insights:\n1. ${finalAnswer.substring(0, 750)}\n2. ${chunkAnswer}`
                                 }
                             ],
                             temperature: 0.7,
-                            max_tokens: 2000
+                            max_tokens: 500
                         });
                         finalAnswer = summaryCompletion.choices[0].message.content;
                     } else {
-                        finalAnswer += '\n\n' + chunkAnswer;
+                        finalAnswer += '\n' + chunkAnswer;
                     }
                 } else {
                     finalAnswer = chunkAnswer;
@@ -343,42 +318,32 @@ async function askQuestionWithChunks(analysisData, question, relevantData) {
             return finalAnswer;
         }
 
-        // For non-chunked data, process as before
-        const dataString = JSON.stringify(relevantData, null, 2);
-        const promptTokens = estimateTokens(dataString);
-        
-        if (promptTokens < 10000) {
-            const completion = await openai.chat.completions.create({
-                model: "gpt-3.5-turbo",
-                messages: [
-                    {
-                        role: "system",
-                        content: `You are a senior IBM business analyst specializing in sales territory analysis. 
-                        Provide specific, data-driven answers with exact numbers and percentages.
-                        Format your responses in markdown with clear sections and bullet points.
-                        When discussing money values, format them as currency with commas (e.g., $1,234,567).`
-                    },
-                    {
-                        role: "user",
-                        content: `Based on this IBM customer data, please answer the following question:
-
-                        Question: ${question}
-
-                        Available Data:
-                        ${dataString}`
-                    }
-                ],
-                temperature: 0.7,
-                max_tokens: 2000
-            });
-            return completion.choices[0].message.content;
+        // For non-chunked data
+        const dataString = JSON.stringify(relevantData);
+        if (dataString.length > 4000) {
+            return 'Error: Data too large. Please try a more specific query.';
         }
 
-        return 'Error: Data too large to process. Please try a more specific query.';
+        const completion = await openai.chat.completions.create({
+            model: "gpt-3.5-turbo",
+            messages: [
+                {
+                    role: "system",
+                    content: "Analyze IBM customer data. Be concise and focus on key metrics."
+                },
+                {
+                    role: "user",
+                    content: `Q: ${question}\nData: ${dataString}`
+                }
+            ],
+            temperature: 0.7,
+            max_tokens: 500
+        });
+        return completion.choices[0].message.content;
 
     } catch (error) {
         console.error('Error getting answer:', error);
-        return 'Sorry, there was an error processing your question. Please try again or rephrase your question.';
+        return 'Sorry, there was an error processing your question. Please try a more specific query.';
     }
 }
 

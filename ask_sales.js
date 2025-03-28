@@ -663,15 +663,7 @@ class SalesDataQuery {
             return 'No customers found matching the criteria.';
         }
         
-        // If specific fields were selected, format them accordingly
-        if (fields) {
-            let output = `Found ${count} customers matching criteria.\n\n`;
-            
-            // Return JSON format for the results
-            return output + JSON.stringify(results, null, 2);
-        }
-        
-        // Calculate totals and breakdowns for full results
+        // Calculate totals and breakdowns
         const totals = results.reduce((acc, customer) => {
             acc.revenue2024 += Number(customer.revenue_2024) || 0;
             acc.revenue2023 += Number(customer.revenue_2023) || 0;
@@ -689,39 +681,78 @@ class SalesDataQuery {
             industries: {}
         });
 
-        // Format summary
-        let summary = `=== SUMMARY (${count} customers) ===\n\n`;
-        summary += 'Revenue Summary:\n';
-        summary += `2024: ${totals.revenue2024.toLocaleString()}\n`;
-        summary += `2023: ${totals.revenue2023.toLocaleString()}\n`;
-        summary += `2022: ${totals.revenue2022.toLocaleString()}\n\n`;
+        // Format summary section
+        let output = `=== SUMMARY (${count} customers) ===\n\n`;
+        output += 'Revenue Summary:\n';
+        output += `2024: $${totals.revenue2024.toLocaleString()}\n`;
+        output += `2023: $${totals.revenue2023.toLocaleString()}\n`;
+        output += `2022: $${totals.revenue2022.toLocaleString()}\n\n`;
         
-        summary += 'Sector Breakdown:\n';
+        output += 'Sector Breakdown:\n';
         Object.entries(totals.sectors)
             .sort((a, b) => b[1] - a[1])
             .forEach(([sector, count]) => {
-                summary += `${sector || 'N/A'}: ${count} customers\n`;
+                output += `${sector || 'N/A'}: ${count} customers\n`;
             });
-        summary += '\n';
+        output += '\n';
 
-        summary += 'Tech Client Status:\n';
+        output += 'Tech Client Status:\n';
         Object.entries(totals.techStatus)
             .sort((a, b) => b[1] - a[1])
             .forEach(([status, count]) => {
-                summary += `${status}: ${count} customers\n`;
+                output += `${status}: ${count} customers\n`;
             });
-        summary += '\n';
+        output += '\n';
 
-        summary += 'Industry Breakdown:\n';
+        output += 'Industry Breakdown:\n';
         Object.entries(totals.industries)
             .sort((a, b) => b[1] - a[1])
             .forEach(([industry, count]) => {
-                summary += `${industry}: ${count} customers\n`;
+                output += `${industry}: ${count} customers\n`;
             });
-        summary += '\n=== CUSTOMER DETAILS (JSON FORMAT) ===\n\n';
+        output += '\n';
 
-        // Return JSON format for all customers
-        return summary + JSON.stringify(results, null, 2);
+        // Format detailed customer section
+        output += '=== CUSTOMER DETAILS ===\n\n';
+        
+        results.forEach((customer, index) => {
+            output += `CUSTOMER ${index + 1}:\n`;
+            output += `Name: ${customer.name}\n`;
+            output += `Location: ${customer.city}, ${customer.state}\n`;
+            
+            // Add coverage information
+            output += `Coverage: ${customer.coverage_name || 'N/A'}\n`;
+            output += `Coverage Type: ${customer.coverage_client_type || 'N/A'}\n`;
+            output += `Coverage Subtype: ${customer.coverage_client_subtype || 'N/A'}\n`;
+            output += `Branch: ${customer.branch_description || 'N/A'}\n`;
+            output += `Sub-Branch: ${customer.sub_branch_description || 'N/A'}\n\n`;
+            
+            output += `Tech Client Status: ${customer.tech_client || 'N/A'}\n`;
+            output += `Industry: ${customer.industry_description || 'N/A'}\n`;
+            output += `Sector: ${customer.sector || 'N/A'}\n`;
+            output += 'Revenue:\n';
+            output += `  2024: $${Number(customer.revenue_2024).toLocaleString()}\n`;
+            output += `  2023: $${Number(customer.revenue_2023).toLocaleString()}\n`;
+            output += `  2022: $${Number(customer.revenue_2022).toLocaleString()}\n`;
+            
+            // Calculate and display growth
+            const growth = customer.growth ? `${customer.growth}%` : 'N/A';
+            output += `Growth: ${growth}\n`;
+            
+            // Format products if they exist
+            if (customer.products && Object.keys(customer.products).length > 0) {
+                output += '\nProducts:\n';
+                Object.entries(customer.products)
+                    .sort(([,a], [,b]) => b - a)  // Sort by usage count
+                    .forEach(([product, count]) => {
+                        output += `  - ${product}: ${count} instances\n`;
+                    });
+            }
+            
+            output += '\n-------------------\n\n';
+        });
+
+        return output;
     }
 }
 

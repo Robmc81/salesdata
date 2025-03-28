@@ -31,3 +31,5 @@ top_clients_analysis.md
 
 # Exclude sensitive information
 *.log territory_analysis_data.json
+territory_analysis_data.json
+OLD_ask_sales.js

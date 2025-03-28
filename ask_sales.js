@@ -754,6 +754,112 @@ class SalesDataQuery {
 
         return output;
     }
+
+    // Add new method for OpenAI analysis
+    async analyzeWithAI(query, openai) {
+        try {
+            // First, get the query results
+            const queryResults = this.search(this.parseQuery(query));
+            
+            // Prepare a more concise subset of data for analysis
+            const analysisData = {
+                summary: {
+                    totalCustomers: queryResults.count,
+                    totalRevenue2024: queryResults.results.reduce((sum, c) => sum + (Number(c.revenue_2024) || 0), 0),
+                    totalRevenue2023: queryResults.results.reduce((sum, c) => sum + (Number(c.revenue_2023) || 0), 0),
+                    totalRevenue2022: queryResults.results.reduce((sum, c) => sum + (Number(c.revenue_2022) || 0), 0),
+                    averageGrowth: queryResults.results.reduce((sum, c) => sum + (Number(c.growth) || 0), 0) / queryResults.count
+                },
+                sectorBreakdown: this.getSectorBreakdown(queryResults.results),
+                techClientBreakdown: this.getTechClientBreakdown(queryResults.results),
+                topProducts: this.getTopProducts(queryResults.results),
+                topCustomers: this.getTopCustomers(queryResults.results)
+            };
+
+            // Create the system prompt
+            const systemPrompt = `You are a data analyst specializing in sales territory analysis. 
+            Analyze the following customer data and provide insights. Focus on:
+            - Revenue trends and growth patterns
+            - Customer segmentation
+            - Product adoption patterns
+            - Key opportunities and risks
+            Be specific and use numbers to support your analysis.`;
+
+            // Create the analysis prompt
+            const analysisPrompt = `Analyze this sales territory data:
+            ${JSON.stringify(analysisData, null, 2)}
+            
+            Provide a detailed analysis including:
+            1. Revenue Analysis
+            2. Customer Segmentation
+            3. Product Analysis
+            4. Key Insights and Recommendations`;
+
+            // Call OpenAI API
+            const completion = await openai.chat.completions.create({
+                model: "gpt-3.5-turbo",
+                messages: [
+                    { role: "system", content: systemPrompt },
+                    { role: "user", content: analysisPrompt }
+                ],
+                temperature: 0.7,
+                max_tokens: 2000
+            });
+
+            return {
+                queryResults,
+                aiAnalysis: completion.choices[0].message.content
+            };
+        } catch (error) {
+            console.error('Error in AI analysis:', error);
+            throw error;
+        }
+    }
+
+    // Helper methods for data aggregation
+    getSectorBreakdown(customers) {
+        const breakdown = {};
+        customers.forEach(customer => {
+            const sector = customer.sector || 'Unknown';
+            breakdown[sector] = (breakdown[sector] || 0) + 1;
+        });
+        return breakdown;
+    }
+
+    getTechClientBreakdown(customers) {
+        const breakdown = {};
+        customers.forEach(customer => {
+            const status = customer.tech_client || 'Unknown';
+            breakdown[status] = (breakdown[status] || 0) + 1;
+        });
+        return breakdown;
+    }
+
+    getTopProducts(customers, limit = 10) {
+        const productCounts = {};
+        customers.forEach(customer => {
+            Object.keys(customer.products || {}).forEach(product => {
+                productCounts[product] = (productCounts[product] || 0) + 1;
+            });
+        });
+
+        return Object.entries(productCounts)
+            .sort(([,a], [,b]) => b - a)
+            .slice(0, limit)
+            .map(([product, count]) => ({ product, count }));
+    }
+
+    getTopCustomers(customers, limit = 5) {
+        return customers
+            .sort((a, b) => (Number(b.revenue_2024) || 0) - (Number(a.revenue_2024) || 0))
+            .slice(0, limit)
+            .map(customer => ({
+                name: customer.name,
+                revenue_2024: Number(customer.revenue_2024) || 0,
+                growth: customer.growth,
+                sector: customer.sector
+            }));
+    }
 }
 
 async function main() {
@@ -761,6 +867,8 @@ async function main() {
         // Load the data
         const data = JSON.parse(await fs.readFile('territory_analysis_data.json', 'utf8'));
         const queryEngine = new SalesDataQuery(data);
+        const OpenAI = require('openai');
+        const openai = new OpenAI();
 
         // Check if input is being piped
         if (!process.stdin.isTTY) {
@@ -787,7 +895,7 @@ async function main() {
         });
 
         // Handle queries
-        rl.on('line', (line) => {
+        rl.on('line', async (line) => {
             if (line.toLowerCase() === 'exit') {
                 console.log('Goodbye!');
                 rl.close();
@@ -795,9 +903,20 @@ async function main() {
             }
 
             try {
-                const queryParams = queryEngine.parseQuery(line);
-                const results = queryEngine.search(queryParams);
-                console.log('\n' + queryEngine.formatResults(results) + '\n');
+                if (line.toLowerCase().startsWith('analyze:')) {
+                    // Extract the query part after 'analyze:'
+                    const query = line.slice(8).trim();
+                    const analysis = await queryEngine.analyzeWithAI(query, openai);
+                    console.log('\nQUERY RESULTS:');
+                    console.log(queryEngine.formatResults(analysis.queryResults));
+                    console.log('\nAI ANALYSIS:');
+                    console.log(analysis.aiAnalysis);
+                } else {
+                    // Regular query handling
+                    const queryParams = queryEngine.parseQuery(line);
+                    const results = queryEngine.search(queryParams);
+                    console.log('\n' + queryEngine.formatResults(results) + '\n');
+                }
             } catch (error) {
                 console.error('Error executing query:', error.message);
             }

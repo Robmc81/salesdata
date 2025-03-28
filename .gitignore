@@ -30,4 +30,4 @@ top_clients_analysis.md
 *.swo
 
 # Exclude sensitive information
-*.log 
+*.log territory_analysis_data.json

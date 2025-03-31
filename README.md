@@ -1,6 +1,6 @@
 # IBM Sales Data Analysis
 
-This repository contains scripts for analyzing IBM sales data using OpenAI. The application provides both direct querying capabilities and AI-powered analysis of the sales territory data.
+This repository contains scripts for analyzing IBM sales data using OpenAI and managing data in Supabase. The application provides both direct querying capabilities and AI-powered analysis of the sales territory data.
 
 ## Files
 
@@ -8,6 +8,7 @@ This repository contains scripts for analyzing IBM sales data using OpenAI. The 
 - `convert_csv.js` - Script to convert CSV data to JSON format
 - `analyze_data.js` - Main analysis script that processes sales data
 - `run_analysis.sh` - Shell script to run the analysis
+- `supabase_uploader.js` - Script to upload data to Supabase
 
 ## Setup
 
@@ -19,12 +20,45 @@ npm install @supabase/supabase-js openai csv-parse dotenv
 2. Set up environment variables in `.env`:
 ```
 OPENAI_API_KEY='your-openai-api-key'
+SUPABASE_URL='your-supabase-project-url'
+SUPABASE_KEY='your-supabase-anon-key'
 ```
 
 3. Convert your CSV data to JSON format:
 ```bash
 node convert_csv.js
 ```
+
+## Supabase Integration
+
+### Database Structure
+The application uses a Supabase database with the following main table:
+
+#### bps_accounts
+- Contains IBM sales territory and account data
+- Includes fields for company information, revenue data, and product flags
+- Supports numeric fields with proper currency and number formatting
+
+### Uploading Data
+To upload data to Supabase:
+
+```bash
+node supabase_uploader.js your_data.csv
+```
+
+Features:
+- Automatic batch processing (100 records per batch)
+- Smart retry logic for network errors
+- Progress tracking and resumable uploads
+- Data validation and cleaning
+- Detailed error reporting
+
+The uploader will:
+1. Clean and validate all records
+2. Handle currency values and numeric fields
+3. Upload data in batches with progress tracking
+4. Save progress to `upload_progress.json`
+5. Automatically resume from last successful batch if interrupted
 
 ## Running the Application
 
@@ -65,6 +99,20 @@ Prefix any query with "analyze:" to get AI-powered insights:
 analyze:field:value
 ```
 Example: `analyze:sector:Industrial`
+
+### Question-Answering
+You can ask specific questions about the data by adding `:question:` to your query:
+```
+analyze:field:value:question:Your specific question here
+```
+Examples:
+```
+analyze:coverage:"US  082 GA  DSS Territory":question:What products do the top customers own?
+analyze:sector:Industrial:question:What is the average growth rate of tech clients?
+analyze:tech_client:Potential:question:Which sectors have the highest revenue potential?
+```
+
+The AI will analyze the filtered data and provide a detailed answer to your specific question, including relevant statistics and insights.
 
 ### Common Fields
 - `name` - Company name
